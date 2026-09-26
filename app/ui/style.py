@@ -148,6 +148,16 @@ def render(session: Session) -> None:
                 if m.get("cliches"):
                     st.caption("Кліше, які все ж трапляються у корпусі:")
                     st.markdown(", ".join(f"«{c}» ×{n}" for c, n in m["cliches"].items()))
+            if prof.get("formulas"):
+                st.markdown("#### Фірмові формули")
+                st.caption("Фрази, що повторюються в більшості ваших сценаріїв. Частина може бути темою, а не стилем — перевірте.")
+                _table(prof["formulas"], "Формула", "У скількох текстах")
+            ph = m.get("phrase_len")
+            if ph:
+                st.caption(
+                    f"Ритм на слух: фраза між розділовими знаками ≈{ph['mean']} слів · "
+                    f"речень-ланцюжків (> 60 слів): {m.get('run_on_share', 0) * 100:.0f}%"
+                )
             st.markdown("#### Поширені конструкції")
             l1, l2, l3, l4 = st.columns(4)
             with l1:

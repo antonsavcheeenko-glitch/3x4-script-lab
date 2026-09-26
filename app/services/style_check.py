@@ -55,6 +55,15 @@ def _label(score: int) -> str:
     return "Не схоже на твій стиль"
 
 
+def _own_phrases(profile: dict | None) -> set[str]:
+    """Фрази, які автор сам регулярно вживає: кліше з корпусу (≥2 рази) і фірмові формули."""
+    if not profile:
+        return set()
+    own = {c for c, n in (profile.get("metrics", {}).get("cliches") or {}).items() if n >= 2}
+    own |= {f for f, _ in profile.get("formulas", [])}
+    return own
+
+
 def check_style(text: str, profile: dict | None) -> StyleCheckResult:
     ref = (profile or {}).get("metrics") or DEFAULT_METRICS
     used_default = not (profile and profile.get("metrics"))
@@ -86,13 +95,15 @@ def check_style(text: str, profile: dict | None) -> StyleCheckResult:
     if m["abstract_ratio"] > max(ref["abstract_ratio"] * 1.5, 0.1):
         abstract_words = sorted({w for w in T.words_lower(text) if T.is_abstract(w)})[:10]
         diags.append(Diagnostic("high" if m["abstract_ratio"] > ref["abstract_ratio"] * 2 else "medium", f"Забагато абстрактних іменників: {m['abstract_ratio']*100:.0f}% змістових слів проти твоїх {ref['abstract_ratio']*100:.0f}%.", 12, [", ".join(abstract_words)]))
-    # 5. кліше
-    if m["cliches"]:
-        n = sum(m["cliches"].values())
-        diags.append(Diagnostic("high", f"Кліше та шаблонні фрази ({n}): у твоєму корпусі вони рідкісні або відсутні.", min(8 * n, 24), [", ".join(f"«{c}»" for c in m["cliches"])]))
+    # 5. кліше — крім тих, що регулярно трапляються в корпусі автора (це його звороти, а не чужі штампи)
+    own = _own_phrases(profile)
+    foreign = {c: n for c, n in m["cliches"].items() if c not in own}
+    if foreign:
+        n = sum(foreign.values())
+        diags.append(Diagnostic("high", f"Кліше та шаблонні фрази ({n}): у твоєму корпусі вони рідкісні або відсутні.", min(8 * n, 24), [", ".join(f"«{c}»" for c in foreign)]))
     # 6. шаблонний вступ
     first = sents[0].lower() if sents else ""
-    gi = [g for g in T.GENERIC_INTROS if g in first]
+    gi = [g for g in T.GENERIC_INTROS if g in first and not any(g in o for o in own)]
     if gi:
         diags.append(Diagnostic("high", "Шаблонний вступ: починається з загальної фрази замість конкретики.", 10, [T.truncate(sents[0], 200)]))
     # 7. конкретика

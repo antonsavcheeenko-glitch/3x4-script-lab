@@ -27,13 +27,20 @@ def normalize(text: str) -> str:
 
 
 def split_paragraphs(text: str) -> list[str]:
+    """Абзаци розділені порожнім рядком. Якщо всередині блоку рядки довгі (> 200 символів у середньому),
+    текст не «зверстаний» переносами, і кожен рядок — окремий абзац (типово для .txt з Word/Google Docs)."""
     text = normalize(text)
     parts = re.split(r"\n\s*\n", text)
     result = []
     for p in parts:
-        p = re.sub(r"[ \t]*\n[ \t]*", " ", p).strip()
-        if p and not re.fullmatch(r"[#*\-=_\s]+", p):
-            result.append(p)
+        lines = [ln.strip() for ln in p.split("\n") if ln.strip()]
+        if len(lines) > 1 and sum(len(ln) for ln in lines) / len(lines) > 200:
+            candidates = lines
+        else:
+            candidates = [" ".join(lines)]
+        for c in candidates:
+            if c and not re.fullmatch(r"[#*\-=_\s]+", c):
+                result.append(c)
     return result
 
 

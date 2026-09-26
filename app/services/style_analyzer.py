@@ -67,6 +67,10 @@ def text_metrics(text: str) -> dict:
     emotive = T.count_phrases(low, T.EMOTIVE_WORDS)
 
     per_k = 1000 / n_words
+    # «фраза» — відрізок між будь-якими розділовими знаками (включно з комами): одиниця ритму на слух
+    phrases = [len(T.words(x)) for x in re.split(r"[.!?…;:,—–()]+", text)]
+    phrases = [n for n in phrases if n > 0]
+    run_on = sum(1 for n in sent_lens if n > 60)
     short = sum(1 for n in sent_lens if n <= 8)
     long_ = sum(1 for n in sent_lens if n > 22)
     return {
@@ -81,6 +85,11 @@ def text_metrics(text: str) -> dict:
             "p90": round(_pct(sent_lens, 0.90), 1),
             "stdev": round(statistics.pstdev(sent_lens), 1) if sent_lens else 0,
         },
+        "phrase_len": {
+            "mean": round(statistics.mean(phrases), 1) if phrases else 0,
+            "median": round(statistics.median(phrases), 1) if phrases else 0,
+        },
+        "run_on_share": round(run_on / n_sent, 3),
         "sentence_mix": {
             "short_share": round(short / n_sent, 3),
             "medium_share": round((n_sent - short - long_) / n_sent, 3),
@@ -125,6 +134,71 @@ def top_ngrams(texts: list[str], n: int, limit: int = 20, min_count: int = 2) ->
                     continue
                 c[" ".join(g)] += 1
     return [(g, k) for g, k in c.most_common(limit * 3) if k >= min_count][:limit]
+
+
+def recurring_formulas(texts: list[str], n_min: int = 3, n_max: int = 7, limit: int = 15) -> list[tuple[str, int]]:
+    """Фірмові формули: повторювані фрази, що трапляються в більшості текстів корпусу.
+
+    1) n-грами (3–7 слів, хоча б одне не стоп-слово), що є в ≥ половині текстів (мінімум 2);
+    2) фрагменти, які перекриваються (кінець одного = початок іншого), склеюються в одну довшу фразу,
+       якщо склеєна фраза теж трапляється в стількох самих текстах;
+    3) вкладені фрагменти прибираються.
+    Повертає (фраза, кількість текстів).
+    """
+    if len(texts) < 2:
+        return []
+    min_docs = max(2, (len(texts) + 1) // 2)
+    docs = [" " + " ".join(T.words_lower(t)) + " " for t in texts]
+
+    def df(phrase: str) -> int:
+        return sum(1 for d in docs if f" {phrase} " in d)
+
+    doc_freq: Counter = Counter()
+    for d in docs:
+        toks = d.split()
+        seen = set()
+        for n in range(n_min, n_max + 1):
+            for g in _ngrams(toks, n):
+                if any(w not in T.STOPWORDS for w in g):
+                    seen.add(" ".join(g))
+        doc_freq.update(seen)
+    phrases = {g: k for g, k in doc_freq.items() if k >= min_docs}
+
+    # склеювання фрагментів, що перекриваються
+    changed = True
+    while changed:
+        changed = False
+        items = sorted(phrases.items(), key=lambda x: -len(x[0]))
+        for a, ka in items:
+            if a not in phrases:
+                continue
+            ta = a.split()
+            for b, kb in items:
+                if b == a or b not in phrases or kb != ka:
+                    continue
+                tb = b.split()
+                for ov in range(min(len(ta), len(tb)) - 1, 1, -1):
+                    if ta[-ov:] == tb[:ov]:
+                        merged = " ".join(ta + tb[ov:])
+                        k = df(merged)
+                        if k >= ka:
+                            phrases.pop(a, None)
+                            phrases.pop(b, None)
+                            phrases[merged] = k
+                            changed = True
+                        break
+                if changed:
+                    break
+            if changed:
+                break
+    # прибрати вкладені
+    result: list[tuple[str, int]] = []
+    for g, k in sorted(phrases.items(), key=lambda x: (-len(x[0]), -x[1])):
+        if any(f" {g} " in f" {r} " and k <= rk for r, rk in result):
+            continue
+        result.append((g, k))
+    result.sort(key=lambda x: (-x[1], -len(x[0].split())))
+    return result[:limit]
 
 
 def top_content_words(texts: list[str], limit: int = 30) -> list[tuple[str, int]]:
@@ -254,7 +328,10 @@ def build_profile(texts: list[str], name: str = "Мій стиль") -> dict:
 
     do: list[str] = []
     avoid: list[str] = []
-    do.append(f"Тримати середню довжину речення ≈{sl['mean']:.0f} слів (типовий діапазон {sl['p25']:.0f}–{sl['p75']:.0f}).")
+    do.append(
+        f"Типове речення ≈{sl['median']:.0f} слів (медіана; діапазон p25–p75: {sl['p25']:.0f}–{sl['p75']:.0f}). "
+        f"Середнє {sl['mean']:.0f} — його підтягують довгі речення."
+    )
     if m["sentence_mix"]["short_share"] >= 0.2:
         do.append(f"Регулярно вставляти короткі речення (≤8 слів): у корпусі це {m['sentence_mix']['short_share']*100:.0f}% речень.")
     do.append(f"Абзац ≈{m['paragraph']['mean_sentences']:.0f} речень / ≈{m['paragraph']['mean_words']:.0f} слів.")
@@ -270,7 +347,15 @@ def build_profile(texts: list[str], name: str = "Мій стиль") -> dict:
     if m["question_rate"] >= 0.03:
         do.append(f"Використовувати риторичні питання дозовано (≈{m['question_rate']*100:.0f}% речень), як «двері» в новий блок.")
 
-    avoid.append(f"Речення довші за {max(sl['p90'], 25):.0f} слів — у корпусі вони рідкісні.")
+    ph = m["phrase_len"]
+    do.append(f"Ритм на слух: фраза між розділовими знаками ≈{ph['mean']:.0f} слів (медіана {ph['median']:.0f}).")
+    if m["run_on_share"] >= 0.1:
+        do.append(
+            f"Фірмова риса: довгі речення-ланцюжки через кому ({m['run_on_share']*100:.0f}% речень > 60 слів). "
+            "Для читабельності сценарію їх варто ділити, зберігаючи інтонацію ланцюжка."
+        )
+    else:
+        avoid.append(f"Речення довші за {max(sl['p90'], 25):.0f} слів — у корпусі вони рідкісні.")
     if m["cliches_per_1k"] < 1:
         avoid.append("Шаблонні вступи та кліше («варто зазначити», «у сучасному світі», «давайте розберемося»).")
     if m["emotive_per_1k"] < 2:
@@ -296,6 +381,7 @@ def build_profile(texts: list[str], name: str = "Мій стиль") -> dict:
         "metrics": m,
         "per_document_sentence_mean": [d["sentence_len"]["mean"] for d in per_doc],
         "tone": tone_parts,
+        "formulas": recurring_formulas(texts),
         "lexicon": {
             "top_words": top_content_words(texts, 30),
             "bigrams": top_ngrams(texts, 2, 20),
@@ -342,7 +428,7 @@ def profile_to_prompt(profile: dict) -> str:
     parts = [
         "ПРОФІЛЬ СТИЛЮ АВТОРА (виведено з його попередніх сценаріїв):",
         f"- Жанр: документально-аналітичний YouTube-сценарій українською, висока щільність фактів, 10–20% гонзо-енергії.",
-        f"- Середня довжина речення: {sl.get('mean', 14)} слів; типовий діапазон {sl.get('p25', 8)}–{sl.get('p75', 18)}. "
+        f"- Типова довжина речення (медіана): {sl.get('median', 12)} слів, середня {sl.get('mean', 14)}; діапазон {sl.get('p25', 8)}–{sl.get('p75', 18)}. "
         f"Коротких речень (≤8 слів) ≈{m.get('sentence_mix', {}).get('short_share', 0.25)*100:.0f}%.",
         f"- Абзац: ≈{m.get('paragraph', {}).get('mean_sentences', 3)} речень.",
         f"- Тон: {'; '.join(profile.get('tone', []))}.",
@@ -354,6 +440,12 @@ def profile_to_prompt(profile: dict) -> str:
         "- УНИКАЙ:",
         *[f"  • {x}" for x in profile.get("avoid", [])],
     ]
+    ph = m.get("phrase_len")
+    if ph:
+        parts.append(f"- Ритм на слух: фраза між розділовими знаками ≈{ph['mean']} слів.")
+    formulas = [f for f, _ in profile.get("formulas", [])[:8]]
+    if formulas:
+        parts.append("- Фірмові формули автора (використовуй у відповідних місцях, не частіше ніж у оригіналі): " + "; ".join(f"«{f}»" for f in formulas))
     starters = [s for s, _ in profile.get("lexicon", {}).get("sentence_starters", [])[:8]]
     if starters:
         parts.append("- Типові початки речень: " + ", ".join(f"«{s}»" for s in starters))
