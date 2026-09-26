@@ -147,7 +147,13 @@ def analyze_paragraph(text: str, facts: list[ExtractedFact]) -> list[SentenceAna
         if cls == "interpretation" and absolutes:
             a.strength_issues.append("інтерпретація подана як беззаперечний факт")
         a.too_strong = bool(a.strength_issues)
-        if a.too_strong:
+        if cls == "interpretation" and a.too_strong and not a.supporting_fact_ids:
+            a.strength_issues.append("порада: або дайте дані, на яких ґрунтується висновок, або явно позначте його як інтерпретацію («я бачу тут…», «схоже, що…»)")
+        num_issue = any(i.startswith("цифри не знайдено") for i in a.strength_issues)
+        if a.too_strong and num_issue:
+            src = by_id[a.supporting_fact_ids[0]]
+            a.suggestion = f"{src.statement.rstrip()} [F{src.id}]"
+        elif a.too_strong:
             sug = soften(clean)
             if "без знайденого джерела" in " ".join(a.strength_issues):
                 sug = "[ПОТРІБНЕ ДЖЕРЕЛО] " + sug

@@ -79,8 +79,8 @@ def run_operation(
     llm: LLMService | None,
     draft_block_id: int | None = None,
     text_b: str = "",
-) -> tuple[str, str]:
-    """Повертає (результат, метод: llm|heuristic)."""
+) -> tuple[str, str, int]:
+    """Повертає (результат, метод: llm|heuristic, id запису EditOperation)."""
     spec = OPERATIONS[op]
     if llm is not None and llm.available:
         if op == "transition":
@@ -94,14 +94,20 @@ def run_operation(
         method = "heuristic"
     else:
         raise RuntimeError("Ця операція потребує ШІ-провайдера. Налаштуйте ключ у .env (див. «Налаштування»).")
-    session.add(
-        EditOperation(
-            project_id=project.id,
-            draft_block_id=draft_block_id,
-            operation=op,
-            input_text=text if op != "transition" else f"{text}\n\n---\n\n{text_b}",
-            output_text=result.strip(),
-        )
+    rec = EditOperation(
+        project_id=project.id,
+        draft_block_id=draft_block_id,
+        operation=op,
+        input_text=text if op != "transition" else f"{text}\n\n---\n\n{text_b}",
+        output_text=result.strip(),
     )
+    session.add(rec)
     session.commit()
-    return result.strip(), method
+    return result.strip(), method, rec.id
+
+
+def mark_applied(session: Session, op_id: int) -> None:
+    rec = session.get(EditOperation, op_id)
+    if rec is not None:
+        rec.applied = True
+        session.commit()
