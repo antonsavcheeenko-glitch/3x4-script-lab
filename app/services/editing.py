@@ -55,7 +55,8 @@ EDIT_SYSTEM = """Ти — редактор українського докуме
 def offline_reduce_cliches(text: str) -> str:
     out = text
     for c in sorted(T.CLICHES, key=len, reverse=True):
-        out = re.sub(r"(?i)(?<![\w])" + re.escape(c) + r"(?![\w])[,:]?\s*", "", out)
+        tail = r"" if c.endswith("що") else r"(?:,?\s*що(?![\w]))?"
+        out = re.sub(r"(?i)(?<![\w])" + re.escape(c) + r"(?![\w])" + tail + r"[,:]?\s*", "", out)
     # велика літера на початку речень після видалення
     out = re.sub(r"(^|[.!?]\s+)([a-zа-яіїєґ])", lambda m: m.group(1) + m.group(2).upper(), out)
     return re.sub(r"[ \t]{2,}", " ", out).strip()

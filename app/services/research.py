@@ -4,6 +4,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import UPLOAD_DIR
@@ -87,6 +88,7 @@ def ingest_document(
         )
     session.commit()
     session.refresh(doc)
+    session.refresh(project)
     return doc
 
 
@@ -274,12 +276,17 @@ def extract_facts(
     """Витягує факти з документа. Повертає (факти, метод)."""
     method = "llm" if llm is not None and llm.available else "heuristic"
     items = llm_facts(llm, doc) if method == "llm" else heuristic_facts(doc)
+    current = list(session.scalars(select(ExtractedFact).where(ExtractedFact.document_id == doc.id)))
     if replace:
-        for f in list(doc.facts):
+        keep = []
+        for f in current:
             if f.method != "manual" and not f.used_in_script and not f.starred:
                 session.delete(f)
+            else:
+                keep.append(f)
+        current = keep
         session.flush()
-    existing = [f.statement for f in doc.facts]
+    existing = [f.statement for f in current]
     created = []
     for it in items:
         if any(token_overlap(it["statement"], e) > 0.85 for e in existing):
@@ -298,6 +305,8 @@ def extract_facts(
         created.append(f)
         existing.append(it["statement"])
     session.commit()
+    session.refresh(doc)
+    session.refresh(project)
     return created, method
 
 

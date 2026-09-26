@@ -49,7 +49,10 @@ def split_sentences(text: str) -> list[str]:
             tail = re.search(r"([A-Za-zА-Яа-яІіЇїЄєҐґ]+)\.$", candidate)
             if tail and m.group(1) == ".":
                 word = tail.group(1)
-                if word.lower() in ABBREVIATIONS or len(word) == 1 and word.isupper():
+                nxt_char = para[m.end():m.end() + 1]
+                # «і т.д.», «і т.п.», «та ін.» часто завершують речення: ріжемо, якщо далі велика літера
+                ends_list = word.lower() in {"д", "п", "ін"} and nxt_char.isupper()
+                if not ends_list and (word.lower() in ABBREVIATIONS or len(word) == 1 and word.isupper()):
                     continue
             nxt = para[m.end():m.end() + 1]
             if nxt and nxt.islower() and m.group(1) == ".":
